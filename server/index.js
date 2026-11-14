@@ -5,24 +5,24 @@ app.use(cors());
 app.use(express.json());
 const games=[
   {
-    "id": "pixel",
-    "name": "Shattered Pixel Dungeon",
+    "id": "aaaaxy",
+    "name": "AAAAXY",
     "genre": "Приключения",
-    "icon": "⚔️",
-    "description": "Пошаговая roguelike-игра с исследованием подземелий.",
-    "url": "https://f-droid.org/repo/com.shatteredpixel.shatteredpixeldungeon_922.apk",
-    "file": "shattered-pixel-dungeon.apk",
-    "source": "https://f-droid.org/packages/com.shatteredpixel.shatteredpixeldungeon/"
+    "icon": "🌀",
+    "description": "Нелинейный 2D платформер с необычными пространствами и секретами.",
+    "url": "https://f-droid.org/repo/io.github.divverent.aaaaxy_107302184.apk",
+    "file": "aaaaxy.apk",
+    "source": "https://f-droid.org/en/packages/io.github.divverent.aaaaxy/"
   },
   {
-    "id": "mindustry",
-    "name": "Mindustry",
-    "genre": "Стратегии",
-    "icon": "🏭",
-    "description": "Строй базы и производственные цепочки, развивай свою фабрику.",
-    "url": "https://f-droid.org/repo/io.anuke.mindustry_1115.apk",
-    "file": "mindustry.apk",
-    "source": "https://f-droid.org/en/packages/io.anuke.mindustry/"
+    "id": "pipes",
+    "name": "Pipes",
+    "genre": "Головоломки",
+    "icon": "🔵",
+    "description": "Соединяй одинаковые цвета и заполняй игровое поле.",
+    "url": "https://f-droid.org/repo/com.vayunmathur.games.pipes_20260718.apk",
+    "file": "pipes.apk",
+    "source": "https://f-droid.org/en/packages/com.vayunmathur.games.pipes/"
   },
   {
     "id": "unciv",
