@@ -21,7 +21,7 @@ import android.widget.Toast;
 public class MainActivity extends Activity {
     private WebView web;
     private DownloadManager dm;
-    private long activeDownload = -1L;
+    private long activeDownload = -1L;\n    private Uri lastApk = null;
     private final BroadcastReceiver receiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             if (DownloadManager.ACTION_DOWNLOAD_COMPLETE.equals(intent.getAction())) {
@@ -68,7 +68,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void download(String url, String filename) {
             runOnUiThread(() -> startDownload(url, filename));
         }
-        @JavascriptInterface public void toast(String message) {
+        @JavascriptInterface public void installLast() { runOnUiThread(() -> installApk(lastApk)); }\n        @JavascriptInterface public void toast(String message) {
             runOnUiThread(() -> MainActivity.this.toast(message));
         }
     }
@@ -118,7 +118,7 @@ public class MainActivity extends Activity {
     }
     private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_LONG).show(); }
 
-    @Override public void onBackPressed() {
+    @Override protected void onResume() {\n        super.onResume();\n        if (Build.VERSION.SDK_INT >= 26 && lastApk != null && getPackageManager().canRequestPackageInstalls()) {\n            Uri apk = lastApk; lastApk = null; installApk(apk);\n        }\n    }\n\n    @Override public void onBackPressed() {
         if (web != null && web.canGoBack()) web.goBack(); else super.onBackPressed();
     }
     @Override protected void onDestroy() {
