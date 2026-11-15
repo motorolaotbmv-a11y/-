@@ -228,11 +228,28 @@ app.get('/api/health', async (req,res) => {
 app.get('/api/games', async (req,res) => {
   try {
     if (SUPABASE_URL && SUPABASE_KEY) {
-      const r = await sb('games?select=id,name,genre,icon,description,url,file,source,is_active&is_active=eq.true&order=name.asc');
+      const r = await sb('games?select=id,name,genre,icon,description,url,file,source,image_url,is_active&is_active=eq.true&order=name.asc');
       return res.json({games:r.data || [],source:'supabase'});
     }
     return res.json({games,source:'local'});
   } catch(e) { recordError(e); res.status(503).json({error:'Не удалось загрузить каталог',details:e.message}); }
+});
+app.get('/api/games/:id/download', async (req,res) => {
+  try {
+    const id = String(req.params.id || '').replace(/[^a-zA-Z0-9_-]/g,'');
+    if (!id) return res.status(400).json({error:'Некорректный ID игры'});
+    const result = await sb('games?select=url,source&id=eq.' + encodeURIComponent(id) + '&is_active=eq.true&limit=1');
+    const game = result.data && result.data[0];
+    if (!game || !game.url) return res.status(404).json({error:'Ссылка на загрузку не найдена'});
+    const target = new URL(game.url);
+    if (target.protocol !== 'https:' || !['f-droid.org','www.f-droid.org'].includes(target.hostname)) {
+      return res.status(403).json({error:'Разрешены только официальные загрузки F-Droid'});
+    }
+    res.redirect(302, target.toString());
+  } catch (e) {
+    recordError(e);
+    res.status(503).json({error:'Не удалось открыть официальную загрузку'});
+  }
 });
 app.post('/api/admin/login', (req,res) => {
   const supplied = String(req.body && req.body.password || '');
