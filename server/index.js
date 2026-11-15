@@ -157,5 +157,173 @@ const games=[
 ];
 app.get('/',(req,res)=>res.json({status:'online',name:'GAME IN GAME API',games:games.length}));
 app.get('/api/games',(req,res)=>res.json({games}));
+
+const crypto = require('crypto');
+const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/,'');
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const ADMIN_PASSWORD = process.env.GIG_ADMIN_PASSWORD || '';
+const UNBAN_CODE = process.env.GIG_UNBAN_CODE || '';
+const sessions = new Map();
+const recentErrors = [];
+const startedAt = Date.now();
+
+function recordError(err) {
+  recentErrors.unshift({time:new Date().toISOString(),message:String(err && err.message || err).slice(0,220)});
+  if (recentErrors.length > 12) recentErrors.pop();
+  console.error(err);
+}
+async function sb(path, options={}) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) throw new Error('Не настроен секретный ключ Supabase в переменных сервера');
+  const response = await fetch(SUPABASE_URL + '/rest/v1/' + path, {
+    ...options,
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: 'Bearer ' + SUPABASE_KEY,
+      'Content-Type':'application/json',
+      ...(options.headers || {})
+    }
+  });
+  const body = await response.text();
+  let data = null;
+  try { data = body ? JSON.parse(body) : null; } catch { data = body; }
+  if (!response.ok) {
+    const message = data && (data.message || data.error || data.details) || ('Supabase HTTP ' + response.status);
+    throw new Error(String(message));
+  }
+  return {data,headers:response.headers,status:response.status};
+}
+function adminOnly(req,res,next) {
+  const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i,'');
+  const expiry = sessions.get(token);
+  if (!token || !expiry || expiry < Date.now()) {
+    sessions.delete(token);
+    return res.status(401).json({error:'Нужен вход администратора'});
+  }
+  next();
+}
+async function audit(action,target,details={}) {
+  try {
+    await sb('admin_audit_log', {method:'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify({action,target_player_id:target || null,details})});
+  } catch (e) { recordError(e); }
+}
+async function findProfile(playerId) {
+  const q = 'profiles?player_id=eq.' + encodeURIComponent(playerId) + '&select=id,player_id,display_name,coins,is_banned,ban_reason&limit=1';
+  const r = await sb(q);
+  return r.data && r.data[0];
+}
+app.get('/api/health', async (req,res) => {
+  res.json({
+    status:'online',
+    name:'GAME IN GAME API',
+    uptime:Math.floor(process.uptime()),
+    memory:process.memoryUsage(),
+    load:require('os').loadavg()[0],
+    supabaseConfigured:!!(SUPABASE_URL && SUPABASE_KEY),
+    adminConfigured:!!ADMIN_PASSWORD,
+    recentErrors:recentErrors.slice(0,5)
+  });
+});
+app.get('/api/games', async (req,res) => {
+  try {
+    if (SUPABASE_URL && SUPABASE_KEY) {
+      const r = await sb('games?select=id,name,genre,icon,description,url,file,source,is_active&is_active=eq.true&order=name.asc');
+      return res.json({games:r.data || [],source:'supabase'});
+    }
+    return res.json({games,source:'local'});
+  } catch(e) { recordError(e); res.status(503).json({error:'Не удалось загрузить каталог',details:e.message}); }
+});
+app.post('/api/admin/login', (req,res) => {
+  const supplied = String(req.body && req.body.password || '');
+  if (!ADMIN_PASSWORD) return res.status(503).json({error:'Пароль администратора не настроен на сервере'});
+  const a = Buffer.from(supplied);
+  const b = Buffer.from(ADMIN_PASSWORD);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a,b)) {
+    return res.status(401).json({error:'Неверный пароль'});
+  }
+  const token = crypto.randomBytes(32).toString('hex');
+  sessions.set(token, Date.now() + 8*60*60*1000);
+  res.json({token,expiresIn:28800});
+});
+app.post('/api/admin/logout', adminOnly, (req,res) => {
+  const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i,'');
+  sessions.delete(token);
+  res.json({ok:true});
+});
+app.get('/api/admin/stats', adminOnly, async (req,res) => {
+  try {
+    const [profiles,gamesCount,downloads,logs] = await Promise.all([
+      sb('profiles?select=id',{method:'HEAD',headers:{Prefer:'count=exact'}}),
+      sb('games?select=id&is_active=eq.true',{method:'HEAD',headers:{Prefer:'count=exact'}}),
+      sb('downloads?select=id',{method:'HEAD',headers:{Prefer:'count=exact'}}),
+      sb('admin_audit_log?select=id&order=created_at.desc&limit=8')
+    ]);
+    const count = h => Number((h.get('content-range') || '').split('/')[1] || 0);
+    res.json({users:count(profiles.headers),games:count(gamesCount.headers),downloads:count(downloads.headers),logs:logs.data || []});
+  } catch(e) { recordError(e); res.status(503).json({error:e.message}); }
+});
+app.post('/api/admin/gift', adminOnly, async (req,res) => {
+  try {
+    const playerId=String(req.body.playerId||'').trim();
+    const gameId=String(req.body.gameId||'').trim();
+    if (!playerId || !gameId) return res.status(400).json({error:'Укажи ID игрока и игру'});
+    const profile=await findProfile(playerId);
+    if (!profile) return res.status(404).json({error:'Игрок не найден'});
+    await sb('user_library?on_conflict=user_id,game_id',{method:'POST',headers:{Prefer:'resolution=merge-duplicates,return=minimal'},body:JSON.stringify({user_id:profile.id,game_id:gameId,source:'gift',gifted_by:'admin'})});
+    await audit('gift_game',playerId,{gameId});
+    res.json({ok:true,message:'Игра добавлена в библиотеку игрока'});
+  } catch(e) { recordError(e); res.status(400).json({error:e.message}); }
+});
+app.post('/api/admin/coins', adminOnly, async (req,res) => {
+  try {
+    const playerId=String(req.body.playerId||'').trim();
+    const amount=Number(req.body.amount);
+    if (!playerId || !Number.isSafeInteger(amount) || amount===0 || Math.abs(amount)>100000000) return res.status(400).json({error:'Проверь ID и количество монет'});
+    const profile=await findProfile(playerId);
+    if (!profile) return res.status(404).json({error:'Игрок не найден'});
+    const next=Number(profile.coins)+amount;
+    if (next<0) return res.status(400).json({error:'Баланс не может быть отрицательным'});
+    await sb('profiles?id=eq.'+encodeURIComponent(profile.id),{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify({coins:next})});
+    await audit('change_coins',playerId,{amount,balance:next});
+    res.json({ok:true,balance:next});
+  } catch(e) { recordError(e); res.status(400).json({error:e.message}); }
+});
+app.post('/api/admin/ban', adminOnly, async (req,res) => {
+  try {
+    const playerId=String(req.body.playerId||'').trim();
+    const reason=String(req.body.reason||'Нарушение правил').slice(0,500);
+    const profile=await findProfile(playerId);
+    if (!profile) return res.status(404).json({error:'Игрок не найден'});
+    await sb('profiles?id=eq.'+encodeURIComponent(profile.id),{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify({is_banned:true,ban_reason:reason,banned_at:new Date().toISOString()})});
+    await audit('ban',playerId,{reason});
+    res.json({ok:true});
+  } catch(e) { recordError(e); res.status(400).json({error:e.message}); }
+});
+app.post('/api/admin/unban', adminOnly, async (req,res) => {
+  try {
+    if (!UNBAN_CODE || String(req.body.code||'') !== UNBAN_CODE) return res.status(403).json({error:'Неверный код разблокировки'});
+    const playerId=String(req.body.playerId||'').trim();
+    const profile=await findProfile(playerId);
+    if (!profile) return res.status(404).json({error:'Игрок не найден'});
+    await sb('profiles?id=eq.'+encodeURIComponent(profile.id),{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify({is_banned:false,ban_reason:null,banned_at:null})});
+    await audit('unban',playerId,{});
+    res.json({ok:true});
+  } catch(e) { recordError(e); res.status(400).json({error:e.message}); }
+});
+app.post('/api/admin/announcement', adminOnly, async (req,res) => {
+  try {
+    const title=String(req.body.title||'Объявление').trim().slice(0,120);
+    const message=String(req.body.message||'').trim().slice(0,2000);
+    if (!message) return res.status(400).json({error:'Напиши сообщение'});
+    await sb('notifications',{method:'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify({recipient_id:null,title,message})});
+    await audit('broadcast',null,{title,messageLength:message.length});
+    res.json({ok:true});
+  } catch(e) { recordError(e); res.status(400).json({error:e.message}); }
+});
+app.post('/api/admin/restart', adminOnly, (req,res) => {
+  res.json({ok:true,message:'Сервер перезапускается'});
+  setTimeout(()=>process.exit(0),250);
+});
+app.use((err,req,res,next)=>{recordError(err);res.status(500).json({error:'Внутренняя ошибка сервера'});});
+
 const port=process.env.PORT||10000;
 app.listen(port,'0.0.0.0',()=>console.log('GAME IN GAME API listening on '+port));
