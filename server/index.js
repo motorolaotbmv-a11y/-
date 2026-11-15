@@ -165,6 +165,8 @@ const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/,'');
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const ADMIN_PASSWORD = process.env.GIG_ADMIN_PASSWORD || '';
 const UNBAN_CODE = process.env.GIG_UNBAN_CODE || '';
+const RENDER_API_KEY = process.env.RENDER_API_KEY || '';
+const RENDER_SERVICE_ID = process.env.RENDER_SERVICE_ID || 'srv-dbs7onlg1s2s73ee6a3g';
 const sessions = new Map();
 const recentErrors = [];
 const startedAt = Date.now();
@@ -262,6 +264,36 @@ app.post('/api/admin/login', (req,res) => {
   const token = crypto.randomBytes(32).toString('hex');
   sessions.set(token, Date.now() + 8*60*60*1000);
   res.json({token,expiresIn:28800});
+});
+async function renderApi(method, action='') {
+  if (!RENDER_API_KEY) throw new Error('Добавь RENDER_API_KEY в переменные Render');
+  const url = 'https://api.render.com/v1/services/' + encodeURIComponent(RENDER_SERVICE_ID) + (action ? '/' + action : '');
+  const response = await fetch(url, {
+    method,
+    headers: { Authorization: 'Bearer ' + RENDER_API_KEY, Accept: 'application/json' }
+  });
+  const body = await response.text();
+  let data = null;
+  try { data = body ? JSON.parse(body) : null; } catch { data = body; }
+  if (!response.ok) {
+    const message = data && (data.message || data.error) || ('Render API HTTP ' + response.status);
+    throw new Error(String(message));
+  }
+  return data;
+}
+app.get('/api/admin/render-status', adminOnly, async (req,res) => {
+  try {
+    const service = await renderApi('GET');
+    res.json({ok:true, name:service.name || 'GAME IN GAME', suspended:service.suspended || 'unknown', status:service.suspended === 'suspended' ? 'suspended' : 'active'});
+  } catch(e) { recordError(e); res.status(503).json({error:e.message}); }
+});
+app.post('/api/admin/render/:action', adminOnly, async (req,res) => {
+  try {
+    const action = String(req.params.action || '');
+    if (!['suspend','resume'].includes(action)) return res.status(400).json({error:'Неизвестная команда'});
+    await renderApi('POST', action);
+    res.json({ok:true, action, message:action === 'suspend' ? 'Команда выключения отправлена' : 'Команда включения отправлена'});
+  } catch(e) { recordError(e); res.status(503).json({error:e.message}); }
 });
 app.post('/api/admin/logout', adminOnly, (req,res) => {
   const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i,'');
