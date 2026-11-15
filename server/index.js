@@ -1,4 +1,5 @@
 const express=require('express');
+const path=require('path');
 const cors=require('cors');
 const app=express();
 app.use(cors());
@@ -155,8 +156,9 @@ const games=[
     "source": "https://f-droid.org/en/packages/io.github.jdanders.dropcount/"
   }
 ];
-app.get('/',(req,res)=>res.json({status:'online',name:'GAME IN GAME API',games:games.length}));
-app.get('/api/games',(req,res)=>res.json({games}));
+app.get('/api/info',(req,res)=>res.json({status:'online',name:'GAME IN GAME API',games:games.length}));
+app.get('/',(req,res)=>res.sendFile(path.join(__dirname,'..','index.html')));
+
 
 const crypto = require('crypto');
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/,'');
